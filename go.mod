@@ -1,4 +1,4 @@
-module denwerk/moco
+module github.com/denwerk/moco
 
 go 1.21.1
 

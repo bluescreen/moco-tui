@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -10,6 +13,12 @@ type Config struct {
 }
 
 func LoadConfig() (*Config, error) {
+	// Load .env file
+	err := godotenv.Load()
+	if err != nil {
+		return nil, fmt.Errorf("error loading .env file: %v", err)
+	}
+
 	cfg := &Config{
 		MocoDomain: os.Getenv("MOCO_DOMAIN"),
 		MocoAPIKey: os.Getenv("MOCO_API_KEY"),

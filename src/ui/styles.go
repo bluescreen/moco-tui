@@ -39,21 +39,25 @@ var (
 
 	// PaneStyle is used for panes
 	PaneStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63")).
-			Padding(0, 0)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 2)
 
 	// FocusedPaneStyle is used for focused panes
 	FocusedPaneStyle = lipgloss.NewStyle().
-				BorderStyle(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("255")).
-				Padding(0, 0)
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62")).
+				Padding(0, 2)
 
 	// ConfirmDialogStyle is used for confirmation dialogs
 	ConfirmDialogStyle = lipgloss.NewStyle().
 				BorderStyle(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("196")). // Red border for warning
 				Padding(1, 0)
+
+	SelectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FF00")).
+			Bold(true)
 )
 
 type ItemDelegate struct{}
@@ -63,7 +67,7 @@ func (d ItemDelegate) Spacing() int                            { return 0 }
 func (d ItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d ItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	i, ok := listItem.(Item)
+	i, ok := listItem.(TableEntry)
 	if !ok {
 		return
 	}

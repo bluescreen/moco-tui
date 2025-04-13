@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/denwerk/moco/src/types"
@@ -23,25 +22,19 @@ type Model struct {
 	taskTitle        string
 	projectID        string
 	timeEntries      []types.TimeEntry
-	date             string
-	hours            string
-	description      string
 	errorMsg         string
 	succesMsg        string
-	submitting       bool
 	width            int
 	height           int
 	taskList         list.Model
-	dateInput        textinput.Model
-	hoursInput       textinput.Model
-	descInput        textinput.Model
 	timeEntriesTable table.Model
-	focusedInput     int
 	ticker           *time.Ticker
 	focusedPane      string           // "left", "form", or "timeEntries"
 	confirmDelete    bool             // Whether to show delete confirmation
 	selectedEntry    *types.TimeEntry // Currently selected time entry
 	lastUpdate       time.Time        // When time entries were last updated
+	form             ui.FormEntry
+	messageTimer     *time.Timer // Timer for clearing messages
 }
 
 // parseHours converts a string to hours, supporting both decimal and time format
@@ -87,62 +80,57 @@ func (m *Model) handleTimeEntrySubmission() {
 
 	// Validate project selection
 	if m.projectID == "" || m.taskID == "" {
-		m.errorMsg = "Please select a project first"
+		m.setMessage("Please select a project first", true)
 		return
 	}
 
+	date, hours, description := m.form.GetValues()
+
 	// Validate hours
-	hours, err := parseHours(m.hours)
+	hoursFloat, err := parseHours(hours)
 	if err != nil {
-		m.errorMsg = err.Error()
+		m.setMessage(err.Error(), true)
 		return
 	}
 
 	// Validate date
-	if m.date == "" {
-		m.errorMsg = "Date is required"
+	if date == "" {
+		m.setMessage("Date is required", true)
 		return
 	}
 
 	// Validate description
-	if m.description == "" {
-		m.errorMsg = "Description is required"
+	if description == "" {
+		m.setMessage("Description is required", true)
 		return
 	}
 
 	projectID, err := strconv.Atoi(m.projectID)
 	if err != nil {
-		m.errorMsg = "Invalid project ID"
+		m.setMessage("Invalid project ID", true)
 		return
 	}
 
 	taskID, err := strconv.Atoi(m.taskID)
 	if err != nil {
-		m.errorMsg = "Invalid task ID"
+		m.setMessage("Invalid task ID", true)
 		return
 	}
 
 	entry := types.TimeEntry{
-		Date:        m.date,
-		Hours:       hours,
+		Date:        date,
+		Hours:       hoursFloat,
 		ProjectID:   projectID,
 		TaskID:      taskID,
-		Description: m.description,
+		Description: description,
 	}
 
 	err = submitTimeEntry(m.cfg, entry)
 	if err != nil {
-		m.errorMsg = fmt.Sprintf("Error submitting time entry: %v", err)
+		m.setMessage(fmt.Sprintf("Error submitting time entry: %v", err), true)
 	} else {
-		m.succesMsg = "Time entry submitted successfully!"
-		// Clear form
-		m.date = time.Now().Format("2006-01-02")
-		m.hours = "0"
-		m.description = ""
-		m.dateInput.SetValue(m.date)
-		m.hoursInput.SetValue(m.hours)
-		m.descInput.SetValue(m.description)
-		// Reload time entries
+		m.setMessage("Time entry submitted successfully!", false)
+		m.form.Clear()
 		m.loadTimeEntries()
 	}
 }
@@ -152,16 +140,11 @@ func (m *Model) handleDeleteTimeEntry() {
 		return
 	}
 
-	if !m.confirmDelete {
-		m.confirmDelete = true
-		return
-	}
-
 	err := deleteTimeEntry(m.cfg, m.selectedEntry.ID)
 	if err != nil {
-		m.errorMsg = fmt.Sprintf("Error deleting time entry: %v", err)
+		m.setMessage(fmt.Sprintf("Error deleting time entry: %v", err), true)
 	} else {
-		m.succesMsg = "Time entry deleted successfully!"
+		m.setMessage("Time entry deleted successfully!", false)
 		m.loadTimeEntries()
 	}
 	m.confirmDelete = false
@@ -172,8 +155,6 @@ func (m *Model) Init() tea.Cmd {
 	// Start the ticker for polling time entries
 	m.ticker = time.NewTicker(10 * time.Second)
 	m.focusedPane = "form" // Start with focus on form pane
-	m.focusedInput = 0
-	m.focusCurrentInput()
 
 	// Return a command that will be executed immediately
 	return tea.Batch(
@@ -209,128 +190,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.focusedPane == "left" {
-		m.taskList, cmd = m.taskList.Update(msg)
-		m.updateTaskInfo()
+	// Check if message timer has expired
+	if m.messageTimer != nil {
+		select {
+		case <-m.messageTimer.C:
+			m.errorMsg = ""
+			m.succesMsg = ""
+			m.messageTimer = nil
+			// Return a command to force a screen update
+			return m, tea.Tick(time.Millisecond, func(time.Time) tea.Msg {
+				return nil
+			})
+		default:
+		}
 	}
 
 	return m, cmd
-}
-
-func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "esc":
-		return m.handleEscKey()
-	case "enter":
-		return m.handleEnterKey()
-	case "right":
-		return m.handleRightKey()
-	case "left":
-		return m.handleLeftKey()
-	case "up", "k":
-		return m.handleUpKey(msg)
-	case "down", "j":
-		return m.handleDownKey(msg)
-	case "tab":
-		return m.handleTabKey()
-	case "d":
-		return m.handleDKey()
-	}
-
-	if m.focusedPane == "form" {
-		m.updateFormInputs(msg)
-	} else if m.focusedPane == "timeEntries" {
-		m.timeEntriesTable, _ = m.timeEntriesTable.Update(msg)
-	}
-
-	return nil
-}
-
-func (m *Model) handleEscKey() tea.Cmd {
-	if m.confirmDelete {
-		m.confirmDelete = false
-		m.selectedEntry = nil
-		return nil
-	}
-	if m.focusedPane != "left" {
-		m.focusedPane = "left"
-		m.blurAllInputs()
-		return nil
-	}
-	if m.ticker != nil {
-		m.ticker.Stop()
-	}
-	return tea.Quit
-}
-
-func (m *Model) handleEnterKey() tea.Cmd {
-	if m.focusedPane == "form" {
-		m.handleTimeEntrySubmission()
-	} else if m.confirmDelete {
-		m.handleDeleteTimeEntry()
-	}
-	return nil
-}
-
-func (m *Model) handleRightKey() tea.Cmd {
-	if m.focusedPane == "left" {
-		m.focusedPane = "form"
-		m.focusedInput = 0
-		m.focusCurrentInput()
-		m.saveLastTask()
-	}
-	return nil
-}
-
-func (m *Model) handleLeftKey() tea.Cmd {
-	if m.focusedPane != "left" {
-		m.focusedPane = "left"
-	}
-	return nil
-}
-
-func (m *Model) handleUpKey(msg tea.KeyMsg) tea.Cmd {
-	if m.focusedPane == "form" {
-		m.focusedInput = (m.focusedInput - 1 + 3) % 3
-		m.focusCurrentInput()
-	} else if m.focusedPane == "timeEntries" {
-		m.timeEntriesTable, _ = m.timeEntriesTable.Update(msg)
-		m.updateSelectedEntry()
-	}
-	return nil
-}
-
-func (m *Model) handleDownKey(msg tea.KeyMsg) tea.Cmd {
-	if m.focusedPane == "form" {
-		m.focusedInput = (m.focusedInput + 1) % 3
-		m.focusCurrentInput()
-	} else if m.focusedPane == "timeEntries" {
-		m.timeEntriesTable, _ = m.timeEntriesTable.Update(msg)
-		m.updateSelectedEntry()
-	}
-	return nil
-}
-
-func (m *Model) handleTabKey() tea.Cmd {
-	switch m.focusedPane {
-	case "left":
-		m.focusedPane = "form"
-		m.focusedInput = 0
-		m.focusCurrentInput()
-	case "form":
-		m.focusedPane = "timeEntries"
-		m.blurAllInputs()
-	case "timeEntries":
-		m.focusedPane = "left"
-	}
-	return nil
-}
-
-func (m *Model) handleDKey() tea.Cmd {
-	if m.focusedPane == "timeEntries" && m.selectedEntry != nil {
-		m.handleDeleteTimeEntry()
-	}
-	return nil
 }
 
 func (m *Model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
@@ -345,11 +220,8 @@ func (m *Model) handleMouseMsg(msg tea.MouseMsg) tea.Cmd {
 		m.focusedPane = "left"
 	} else if msg.X >= leftWidth && msg.Y < formHeight {
 		m.focusedPane = "form"
-		m.focusedInput = 0
-		m.focusCurrentInput()
 	} else if msg.X >= leftWidth && msg.Y >= formHeight {
 		m.focusedPane = "timeEntries"
-		m.blurAllInputs()
 	}
 
 	return nil
@@ -363,19 +235,13 @@ func (m *Model) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
 	m.timeEntriesTable.SetWidth(msg.Width/2 - h)
 }
 
-func (m *Model) updateFormInputs(msg tea.KeyMsg) {
-	m.dateInput, _ = m.dateInput.Update(msg)
-	m.hoursInput, _ = m.hoursInput.Update(msg)
-	m.descInput, _ = m.descInput.Update(msg)
-}
-
 func (m *Model) updateTaskInfo() {
 	selected := m.taskList.SelectedItem()
 	if selected == nil {
 		return
 	}
 
-	selectedItem, ok := selected.(ui.Item)
+	selectedItem, ok := selected.(ui.TableEntry)
 	if !ok || selectedItem.IsProjectHeader {
 		return
 	}
@@ -383,23 +249,25 @@ func (m *Model) updateTaskInfo() {
 	m.taskID = fmt.Sprintf("%d", selectedItem.TaskID)
 	m.projectID = fmt.Sprintf("%d", selectedItem.ProjectID)
 	m.taskTitle = selectedItem.Desc
+	m.form.SetTaskTitle(m.taskTitle)
 }
 
 func (m *Model) updateSelectedEntry() {
-	if row := m.timeEntriesTable.SelectedRow(); len(row) > 0 {
-		for _, entry := range m.timeEntries {
-			if fmt.Sprintf("%d", entry.ID) == row[0] {
-				m.selectedEntry = &entry
+	cursor := m.timeEntriesTable.Cursor()
+	if cursor > 0 {
+		for i := range m.timeEntries {
+			if i == cursor {
+				m.selectedEntry = &m.timeEntries[i]
 				break
 			}
 		}
+	} else {
+		m.selectedEntry = nil
 	}
 }
 
 func (m *Model) blurAllInputs() {
-	m.dateInput.Blur()
-	m.hoursInput.Blur()
-	m.descInput.Blur()
+	m.form.BlurAll()
 }
 
 func (m *Model) tickerCmd() tea.Cmd {
@@ -426,49 +294,50 @@ func (m Model) View() string {
 
 	// Right Pane (Form and Time Entries)
 	// Form Section
-	entryForm := lipgloss.JoinVertical(lipgloss.Left,
-		ui.TitleStyle.Render("New Time Entry"),
-		fmt.Sprintf("Task: %s", m.taskTitle),
-		fmt.Sprintf("Date: %s", m.dateInput.View()),
-		fmt.Sprintf("Hours: %s", m.hoursInput.View()),
-		fmt.Sprintf("Description: %s", m.descInput.View()),
-		"Press 'enter' to submit, 'esc' to cancel, 'tab' to switch between panes.",
+	formContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.form.View(),
 	)
 
 	// Add error message if present
-	var errorMsg string
 	if m.errorMsg != "" {
-		errorMsg = ui.ErrorStyle.Render(fmt.Sprintf("Error: %s", m.errorMsg))
+		formContent = lipgloss.JoinVertical(lipgloss.Left,
+			formContent,
+			ui.ErrorStyle.Render(fmt.Sprintf("\nError: %s", m.errorMsg)),
+		)
 	}
 
 	// Add success message if present
-	var successMsg string
 	if m.succesMsg != "" {
-		successMsg = ui.SuccessStyle.Render(m.succesMsg)
+		formContent = lipgloss.JoinVertical(lipgloss.Left,
+			formContent,
+			ui.SuccessStyle.Render(fmt.Sprintf("\nSuccess: %s", m.succesMsg)),
+		)
 	}
-
-	// Combine messages
-	messages := lipgloss.JoinVertical(lipgloss.Left, errorMsg, successMsg)
-
-	formSection := lipgloss.JoinVertical(lipgloss.Left,
-		entryForm,
-		messages,
-	)
 
 	formStyle := ui.PaneStyle.Width(rightWidth)
 	if m.focusedPane == "form" {
 		formStyle = ui.FocusedPaneStyle.Width(rightWidth)
 	}
 
-	formPane := formStyle.Render(formSection)
+	formPane := formStyle.Render(formContent)
 
 	// Time Entries Section
 	timeEntriesTitle := ui.TitleStyle.Render("Time Entries")
 	lastUpdate := ui.LastUpdateStyle.Render(fmt.Sprintf("Last updated: %s", m.lastUpdate.Format("15:04:05")))
 
-	timeEntriesContent := lipgloss.JoinVertical(lipgloss.Left,
+	// Add selected entry ID to header if one is selected
+	selectedInfo := ""
+	if m.selectedEntry != nil {
+		selectedInfo = fmt.Sprintf(" (Selected: #%d)", m.selectedEntry.ID)
+	}
+	header := lipgloss.JoinVertical(lipgloss.Left,
 		timeEntriesTitle,
 		lastUpdate,
+		ui.SelectedStyle.Render(selectedInfo),
+	)
+
+	timeEntriesContent := lipgloss.JoinVertical(lipgloss.Left,
+		header,
 		m.timeEntriesTable.View(),
 	)
 
@@ -519,6 +388,18 @@ func (m *Model) loadTimeEntries() {
 
 func (m *Model) updateTable() {
 	m.timeEntriesTable = ui.CreateTimeEntriesTable(m.timeEntries, 20)
+
+	// Set the selected entry based on the current selection
+	if row := m.timeEntriesTable.SelectedRow(); len(row) > 0 {
+		for i, entry := range m.timeEntries {
+			if fmt.Sprintf("%d", entry.ID) == row[0] {
+				m.selectedEntry = &m.timeEntries[i]
+				break
+			}
+		}
+	} else {
+		m.selectedEntry = nil
+	}
 }
 
 func (m *Model) saveLastTask() {
@@ -554,6 +435,7 @@ func (m *Model) loadLastTask() {
 		m.projectID = fmt.Sprintf("%d", lastTask.ProjectID)
 		m.taskID = fmt.Sprintf("%d", lastTask.TaskID)
 		m.taskTitle = lastTask.TaskTitle
+		m.form.SetTaskTitle(m.taskTitle)
 	}
 }
 
@@ -587,25 +469,10 @@ func newModel(cfg *Config, projects []types.Project) *Model {
 	taskList := list.New(items, ui.ItemDelegate{}, 0, 0)
 	taskList.Title = "MOCO " + cfg.MocoDomain + " - Select a task:"
 
-	dateInput := textinput.New()
-	dateInput.Placeholder = "Enter date (YYYY-MM-DD)"
-	dateInput.SetValue(time.Now().Format("2006-01-02"))
-
-	hoursInput := textinput.New()
-	hoursInput.Placeholder = "Enter hours (e.g. 1.5 or 1:30)"
-
-	descInput := textinput.New()
-	descInput.Placeholder = "Enter description"
-
-	hoursInput.Focus()
-
 	model := &Model{
-		cfg:        cfg,
-		taskList:   taskList,
-		dateInput:  dateInput,
-		hoursInput: hoursInput,
-		descInput:  descInput,
-		date:       time.Now().Format("2006-01-02"),
+		cfg:      cfg,
+		taskList: taskList,
+		form:     ui.NewFormEntry(),
 	}
 
 	model.loadLastTask()
@@ -621,7 +488,7 @@ func (m *Model) selectLastTask(items []list.Item) {
 	}
 
 	for i, item := range items {
-		if taskItem, ok := item.(ui.Item); ok && !taskItem.IsProjectHeader {
+		if taskItem, ok := item.(ui.TableEntry); ok && !taskItem.IsProjectHeader {
 			if fmt.Sprintf("%d", taskItem.ProjectID) == m.projectID &&
 				fmt.Sprintf("%d", taskItem.TaskID) == m.taskID {
 				m.taskList.Select(i)
@@ -631,19 +498,18 @@ func (m *Model) selectLastTask(items []list.Item) {
 	}
 }
 
-func (m *Model) focusCurrentInput() {
-	// Blur all inputs first
-	m.dateInput.Blur()
-	m.hoursInput.Blur()
-	m.descInput.Blur()
-
-	// Focus the current input
-	switch m.focusedInput {
-	case 0:
-		m.dateInput.Focus()
-	case 1:
-		m.hoursInput.Focus()
-	case 2:
-		m.descInput.Focus()
+func (m *Model) setMessage(message string, isError bool) {
+	if isError {
+		m.errorMsg = message
+	} else {
+		m.succesMsg = message
 	}
+
+	// Reset any existing timer
+	if m.messageTimer != nil {
+		m.messageTimer.Stop()
+	}
+
+	// Create new timer
+	m.messageTimer = time.NewTimer(2 * time.Second)
 }

@@ -12,16 +12,13 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/denwerk/moco/src/config"
-	"github.com/denwerk/moco/src/logger"
-	"github.com/denwerk/moco/src/task"
 	"github.com/denwerk/moco/src/types"
 	"github.com/denwerk/moco/src/ui"
 	"github.com/joho/godotenv"
 )
 
 type Model struct {
-	cfg              *config.Config
+	cfg              *Config
 	taskID           string
 	taskTitle        string
 	projectID        string
@@ -539,7 +536,7 @@ func (m *Model) saveLastTask() {
 		return
 	}
 
-	task.SaveLastTask(task.LastTask{
+	SaveLastTask(LastTask{
 		ProjectID: projectID,
 		TaskID:    taskID,
 		TaskTitle: m.taskTitle,
@@ -547,7 +544,7 @@ func (m *Model) saveLastTask() {
 }
 
 func (m *Model) loadLastTask() {
-	lastTask, err := task.LoadLastTask()
+	lastTask, err := LoadLastTask()
 	if err != nil {
 		log.Printf("Error loading last task: %v", err)
 		return
@@ -565,12 +562,12 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	if err := logger.Init(); err != nil {
+	if err := InitLogger(); err != nil {
 		log.Fatal("Error initializing logger:", err)
 	}
-	defer logger.Close()
+	defer Close()
 
-	cfg, err := config.LoadConfig()
+	cfg, err := LoadConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -585,7 +582,7 @@ func main() {
 	p.Run()
 }
 
-func newModel(cfg *config.Config, projects []types.Project) *Model {
+func newModel(cfg *Config, projects []types.Project) *Model {
 	items := ui.MapProjectsToItems(projects)
 	taskList := list.New(items, ui.ItemDelegate{}, 0, 0)
 	taskList.Title = "MOCO " + cfg.MocoDomain + " - Select a task:"

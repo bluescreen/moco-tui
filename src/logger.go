@@ -1,4 +1,4 @@
-package logger
+package main
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 
 var logFile *os.File
 
-func Init() error {
+func InitLogger() error {
 	// Create logs directory if it doesn't exist
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return fmt.Errorf("error creating logs directory: %v", err)
